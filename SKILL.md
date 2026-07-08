@@ -173,6 +173,24 @@ curl -X POST https://delegauth-service.vercel.app/receipts/verify \
 → {"valid":false,"algorithm":"HMAC-SHA256"}
 ```
 
+### GET /demo ⭐ (Start here)
+Run a complete end-to-end delegation scenario in one call — no parameters needed.
+Executes: issue root → delegate 2 children → verify → revoke root → confirm cascade.
+```
+curl https://delegauth-service.vercel.app/demo
+→ {
+    "demo": "DelegAuth full delegation scenario",
+    "result": "PASS — all 7 steps completed successfully",
+    "summary": {
+      "root_issued": "<hex>",
+      "children_delegated": ["<hex>", "<hex>"],
+      "revocation_cascade": 3,
+      "post_revoke_valid": false
+    },
+    "steps": [...]
+  }
+```
+
 ---
 
 ## When to Use DelegAuth (Agent Decision Guide)
