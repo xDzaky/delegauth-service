@@ -1,0 +1,2 @@
+# runtime.txt — tells Railway/Render which Python version to use
+python-3.12.8
