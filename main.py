@@ -14,6 +14,8 @@ POST /tokens/verify            — verify a token (audience + scope check)
 POST /tokens/revoke            — revoke a token and its entire subtree
 GET  /tokens/{token_id}/tree   — inspect the delegation tree for one token
 GET  /audit/log                — full audit trail (most recent 200 events)
+GET  /receipts/{token_id}      — HMAC-signed receipt for any token operation
+GET  /receipts/{token_id}/verify — verify a receipt offline (no trust required)
 """
 
 from __future__ import annotations
@@ -481,3 +483,53 @@ async def token_tree(token_id: str) -> dict[str, Any]:
 @app.get("/audit/log")
 async def audit_log() -> list[dict[str, Any]]:
     return _store.audit_log()
+
+
+# ── Signed Receipts ─────────────────────────────────────────────────────────
+# Each operation recorded in the audit log can be retrieved as a
+# cryptographically signed receipt.  Agents can pass receipts to a third
+# party who verifies them offline using GET /receipts/{token_id}/verify
+# without having to trust — or even contact — the DelegAuth server.
+
+
+def _make_receipt(event: dict[str, Any]) -> dict[str, Any]:
+    """Return a signed receipt dict for one audit-log entry."""
+    payload = json.dumps(event, separators=(",", ":"), sort_keys=True)
+    sig = hmac.new(_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+    return {"receipt": event, "signature": sig, "algorithm": "HMAC-SHA256"}
+
+
+@app.get("/receipts/{token_id}")
+async def get_receipt(token_id: str) -> dict[str, Any]:
+    """Return an HMAC-SHA256 signed receipt for a token's most recent event.
+
+    The receipt can be handed to any third party as cryptographic proof
+    that this delegation event occurred and was recorded by this service.
+    Verify it offline with GET /receipts/{token_id}/verify.
+    """
+    log = _store.audit_log()
+    # Most recent event for this token
+    for entry in reversed(log):
+        if entry.get("token_id") == token_id:
+            return _make_receipt(entry)
+    raise HTTPException(status_code=404, detail=f"no events for token: {token_id}")
+
+
+class ReceiptVerifyReq(BaseModel):
+    receipt: dict[str, Any]
+    signature: str
+
+
+@app.post("/receipts/verify")
+async def verify_receipt(req: ReceiptVerifyReq) -> dict[str, Any]:
+    """Verify a signed receipt offline.
+
+    Pass the receipt + signature returned by GET /receipts/{token_id}.
+    Returns {"valid": true} if the receipt is authentic and untampered.
+    This endpoint requires no knowledge of the original token — it only
+    checks the HMAC signature against the server secret.
+    """
+    payload = json.dumps(req.receipt, separators=(",", ":"), sort_keys=True)
+    expected = hmac.new(_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+    valid = hmac.compare_digest(expected, req.signature)
+    return {"valid": valid, "algorithm": "HMAC-SHA256"}
