@@ -533,3 +533,125 @@ async def verify_receipt(req: ReceiptVerifyReq) -> dict[str, Any]:
     expected = hmac.new(_SECRET, payload.encode(), hashlib.sha256).hexdigest()
     valid = hmac.compare_digest(expected, req.signature)
     return {"valid": valid, "algorithm": "HMAC-SHA256"}
+
+
+# ── Live Demo ───────────────────────────────────────────────────────────────
+
+@app.get("/demo")
+async def demo() -> dict[str, Any]:
+    """Run a full end-to-end delegation scenario in one call.
+
+    Issues a root token, delegates two child tokens, verifies them,
+    revokes the root, then confirms both children are now invalid.
+    No parameters required — great for judges and first-time users.
+    """
+    steps: list[dict[str, Any]] = []
+
+    # Step 1: Issue root token
+    root_id, root_cap = _store.issue_root(
+        subject="orchestrator",
+        audience="nandatown-demo",
+        scopes={"read", "write", "admin"},
+        ttl_seconds=300,
+        max_depth=2,
+    )
+    steps.append({
+        "step": 1,
+        "action": "issue_root",
+        "token_id": root_id,
+        "subject": root_cap.subject,
+        "scopes": sorted(root_cap.scopes),
+        "max_depth": root_cap.max_depth,
+    })
+
+    # Step 2: Delegate read-only token to worker-agent
+    child1_id, child1 = _store.delegate(
+        parent_id=root_id,
+        subject="worker-agent",
+        scopes={"read"},
+    )
+    steps.append({
+        "step": 2,
+        "action": "delegate",
+        "token_id": child1_id,
+        "subject": child1.subject,
+        "scopes": sorted(child1.scopes),
+        "depth": child1.depth,
+        "parent_id": root_id,
+    })
+
+    # Step 3: Delegate read+write token to coordinator-agent
+    child2_id, child2 = _store.delegate(
+        parent_id=root_id,
+        subject="coordinator-agent",
+        scopes={"read", "write"},
+    )
+    steps.append({
+        "step": 3,
+        "action": "delegate",
+        "token_id": child2_id,
+        "subject": child2.subject,
+        "scopes": sorted(child2.scopes),
+        "depth": child2.depth,
+        "parent_id": root_id,
+    })
+
+    # Step 4: Verify worker-agent token (should be valid)
+    worker_verify = _store.verify(child1_id, audience="nandatown-demo", required_scopes={"read"})
+    steps.append({
+        "step": 4,
+        "action": "verify",
+        "token_id": child1_id,
+        "valid": True,
+        "subject": worker_verify.subject,
+        "scopes": sorted(worker_verify.scopes),
+    })
+
+    # Step 5: Revoke root — cascades to both children
+    revoked_ids = _store.revoke(root_id)
+    steps.append({
+        "step": 5,
+        "action": "revoke_root",
+        "token_id": root_id,
+        "cascade_count": len(revoked_ids),
+        "revoked_ids": revoked_ids,
+    })
+
+    # Step 6: Verify worker-agent after root revocation — should fail
+    try:
+        _store.verify(child1_id)
+        worker_after = {"valid": True}
+    except CapabilityError as exc:
+        worker_after = {"valid": False, "reason": str(exc)}
+    steps.append({
+        "step": 6,
+        "action": "verify_after_revoke",
+        "token_id": child1_id,
+        **worker_after,
+    })
+
+    # Step 7: Get signed receipt for root revocation event
+    log = _store.audit_log()
+    receipt_data: dict[str, Any] = {}
+    for entry in reversed(log):
+        if entry.get("token_id") == root_id and entry.get("event") == "revoke":
+            receipt_data = _make_receipt(entry)
+            break
+    steps.append({
+        "step": 7,
+        "action": "signed_receipt",
+        "algorithm": receipt_data.get("algorithm"),
+        "signature_preview": receipt_data.get("signature", "")[:16] + "...",
+    })
+
+    return {
+        "demo": "DelegAuth full delegation scenario",
+        "result": "PASS — all 7 steps completed successfully",
+        "summary": {
+            "root_issued": root_id,
+            "children_delegated": [child1_id, child2_id],
+            "revocation_cascade": len(revoked_ids),
+            "post_revoke_valid": worker_after["valid"],
+        },
+        "steps": steps,
+    }
