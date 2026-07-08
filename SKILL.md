@@ -5,7 +5,10 @@ Agents can carve narrower sub-tokens from a parent without calling the
 original issuer; revoking a parent cascades to every descendant instantly.
 
 ## Base URL
-https://delegauth.up.railway.app
+https://delegauth-service.vercel.app
+
+## Backup URL (persistent, stateful)
+https://delegauth-service.onrender.com
 
 ## Endpoints
 
